@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>粒子星球 · 手势交互</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #020409; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: #cfeaff; }
+  #scene { position: fixed; inset: 0; display: block; }
+  /* 暗角 */
+  #vignette {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,4,0.55) 100%);
+  }
+  /* 左上信息面板 */
+  #panel {
+    position: fixed; top: 18px; left: 18px; z-index: 10;
+    background: rgba(8, 14, 26, 0.55);
+    border: 1px solid rgba(90, 200, 255, 0.22);
+    border-radius: 14px;
+    padding: 14px 16px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    min-width: 230px;
+    user-select: none;
+  }
+  #panel h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: 2px;
+    color: #9fe8ff; margin-bottom: 8px;
+    text-shadow: 0 0 12px rgba(80, 220, 255, 0.6);
+  }
+  #panel .row { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; line-height: 1.9; color: #7fa8c0; }
+  #panel .row b { color: #dff4ff; font-weight: 600; }
+  #gestureTag {
+    display: inline-block; margin-top: 6px; padding: 3px 10px;
+    font-size: 12px; border-radius: 999px;
+    background: rgba(60, 200, 255, 0.12);
+    border: 1px solid rgba(90, 200, 255, 0.35);
+    color: #8ee7ff; transition: all .25s;
+  }
+  #gestureTag.active { background: rgba(60, 230, 255, 0.28); color: #fff; text-shadow: 0 0 8px rgba(120,230,255,.9); }
+  #panel .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #panel button {
+    font: 12px/1 inherit; font-family: inherit; color: #bfeaff;
+    background: rgba(50, 140, 200, 0.16);
+    border: 1px solid rgba(90, 200, 255, 0.3);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer;
+    transition: background .2s, transform .1s;
+  }
+  #panel button:hover { background: rgba(70, 190, 255, 0.3); }
+  #panel button:active { transform: scale(0.96); }
+  #panel input[type=range] { width: 100%; accent-color: #57d8ff; margin-top: 4px; }
+  /* 手势说明 */
+  #help {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    z-index: 10; display: flex; gap: 18px; flex-wrap: wrap; justify-content: center;
+    font-size: 12px; color: #6f9db8;
+    background: rgba(8, 14, 26, 0.45);
+    border: 1px solid rgba(90, 200, 255, 0.14);
+    border-radius: 12px; padding: 8px 18px;
+    backdrop-filter: blur(8px);
+    white-space: nowrap;
+  }
+  #help span b { color: #9fe0ff; font-weight: 600; }
+  /* 摄像头预览 */
+  #camWrap {
+    position: fixed; right: 18px; bottom: 18px; z-index: 10;
+    border: 1px solid rgba(90, 200, 255, 0.25); border-radius: 12px;
+    overflow: hidden; background: rgba(8,14,26,.6);
+    display: none;
+  }
+  #camWrap canvas { display: block; width: 200px; height: 150px; }
+  #camWrap .label { font-size: 11px; color: #7fa8c0; text-align: center; padding: 4px 0; }
+  #camGesture {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; line-height: 1; padding: 4px 10px; border-radius: 999px;
+    background: rgba(4, 10, 18, 0.72);
+    border: 1px solid rgba(90, 200, 255, 0.4);
+    color: #dff4ff; white-space: nowrap;
+    backdrop-filter: blur(4px);
+    transition: background .2s, box-shadow .2s;
+  }
+  #camGesture.active {
+    background: rgba(30, 180, 240, 0.35);
+    box-shadow: 0 0 14px rgba(90, 210, 255, 0.55);
+  }
+  /* 加载/错误提示 */
+  #msg {
+    position: fixed; top: 18px; right: 18px; z-index: 11;
+    font-size: 12px; color: #8fc7e8;
+    background: rgba(8, 14, 26, 0.55);
+    border: 1px solid rgba(90, 200, 255, 0.18);
+    border-radius: 10px; padding: 8px 14px;
+    max-width: 300px; backdrop-filter: blur(8px);
+  }
+  #msg.err { color: #ffb3a1; border-color: rgba(255, 120, 90, 0.35); }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+<div id="vignette"></div>
+
+<div id="panel">
+  <h1>✦ 粒子星球 · 手势交互</h1>
+  <div class="row"><span>粒子数量</span><b id="pCount">—</b></div>
+  <div class="row"><span>帧率</span><b id="fps">—</b></div>
+  <div class="row"><span>交互模式</span><b id="mode">鼠标</b></div>
+  <div id="gestureTag">待机</div>
+  <div class="row" style="margin-top:10px"><span>粒子规模</span><b id="pSliderVal">26000</b></div>
+  <input type="range" id="pSlider" min="8000" max="50000" step="2000" value="26000">
+  <div class="btns">
+    <button id="btnCam">开启摄像头</button>
+    <button id="btnTheme">切换配色</button>
+    <button id="btnBoom">爆发 (空格)</button>
+  </div>
+</div>
+
+<div id="help">
+  <span><b>捏合手指</b> 聚合成球</span>
+  <span><b>张开手掌</b> 粒子扩散</span>
+  <span><b>握拳</b> 超新星爆发</span>
+  <span><b>移动手掌</b> 牵引星球</span>
+  <span><b>竖起双指</b> 旋转整体</span>
+  <span><b>手掌前推</b> 潜入内部</span>
+  <span><b>鼠标模式</b> 拖动=推开 · 点击=爆发 · 滚轮=缩放</span>
+</div>
+
+<div id="camWrap"><canvas id="camCanvas" width="200" height="150"></canvas><div id="camGesture">待机</div><div class="label">摄像头 · 手部追踪</div></div>
+<div id="msg">正在初始化…</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { AfterimagePass } from 'three/addons/postprocessing/AfterimagePass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+/* ================= 全局状态 ================= */
+const state = {
+  mode: 'mouse',            // 'mouse' | 'hand'
+  gesture: 'idle',          // idle | pinch | palm | fist
+  energy: 1.0,              // 球体半径倍率（ pinch 收缩 / palm 扩散 ）
+  scatter: 0,               // 爆发后的弥散剩余时间
+  pinchPoint: new THREE.Vector3(0, 0, 0),
+  attractor: new THREE.Vector3(0, 0, 0),  // 手掌/鼠标世界坐标（平滑后）
+  rawPinchPoint: new THREE.Vector3(0, 0, 0), // 识别原始点（未平滑）
+  rawAttractor: new THREE.Vector3(0, 0, 0),
+  pinchTarget: 0,           // 捏合强度目标值
+  palmTarget: 0,            // 排斥强度目标值
+  palmRepel: 0,             // 张开手掌的排斥强度
+  pinch: 0,                 // 捏合强度 0..1（平滑）
+  yawTarget: 0.04,          // 旋转摇杆目标角速度（弧度/秒）
+  yawVel: 0,
+  pitchTarget: 0,
+  pitchVel: 0,
+  camZ: 130,                // 相机距离：手前推/滚轮可潜入粒子内部
+  camZTarget: 130,
+  camZVel: 0,               // 相机径向速度（平滑变速，杜绝瞬加速）
+  scaleSm: 0.2,             // 手掌尺寸平滑值（识别噪声过滤）
+  explosionFlash: 0,
+  themeIdx: 0,
+  handSeen: false,
+};
+window.__status = { mode: 'mouse', gesture: 'idle', fps: 0, particles: 0, mp: 'loading', cam: 'off', err: '' };
+
+const THEMES = [
+  { name: '青色星芒', hue: 0.52, accent: '#57d8ff' },
+  { name: '翡翠光海', hue: 0.40, accent: '#5affc3' },
+  { name: '冰晶蓝白', hue: 0.57, sat: 0.32, accent: '#bfe6ff' },
+  { name: '紫色星云', hue: 0.76, accent: '#c98bff' },
+  { name: '樱粉星潮', hue: 0.93, accent: '#ff9ed8' },
+  { name: '熔金烈焰', hue: 0.07, accent: '#ffb45e' },
+  { name: '赤色脉冲', hue: 0.995, accent: '#ff7a6e' },
+  { name: '极光幻彩', rainbow: true, accent: '#9fe8ff' },
+];
+
+const msgEl = document.getElementById('msg');
+function setMsg(text, isErr = false) {
+  msgEl.textContent = text;
+  msgEl.classList.toggle('err', isErr);
+  if (isErr) window.__status.err = text;
+}
+
+/* ================= 三维场景 ================= */
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.85;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x02040a);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1000);
+camera.position.set(0, 0, 130);
+
+const group = new THREE.Group();
+scene.add(group);
+
+/* ---------- 发光核心 ---------- */
+function makeGlowTexture(inner = 'rgba(255,255,255,1)', outer = 'rgba(255,255,255,0)') {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+  g.addColorStop(0, inner);
+  g.addColorStop(0.25, 'rgba(255,255,255,0.85)');
+  g.addColorStop(0.6, 'rgba(255,255,255,0.18)');
+  g.addColorStop(1, outer);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(c);
+}
+const haloSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: makeGlowTexture('rgba(120,220,255,0.5)'), color: new THREE.Color(THEMES[0].accent),
+  blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.16,
+}));
+haloSprite.scale.setScalar(36);
+group.add(haloSprite);
+
+/* ---------- 粒子系统 ---------- */
+let points = null;
+let geo = null;
+let pos = null, vel = null, dir = null, radius = null, omega = null, phase = null, colors = null, sizes = null;
+let COUNT = 26000;
+const BASE_R = 42;
+
+const pMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: `
+    attribute float aSize;
+    attribute vec3 aColor;
+    varying vec3 vColor;
+    void main() {
+      vColor = aColor;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = min(aSize * (150.0 / -mv.z), 26.0);  // 潜入内部时限制点大小，避免糊屏
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying vec3 vColor;
+    void main() {
+      vec2 uv = gl_PointCoord - 0.5;
+      float d = length(uv);
+      float a = smoothstep(0.5, 0.0, d);
+      a = pow(a, 3.0);
+      gl_FragColor = vec4(vColor * (0.38 + a * 0.75), a);
+    }`,
+});
+
+function hsl(h, s, l) { const c = new THREE.Color(); c.setHSL(h, s, l); return c; }
+
+function applyTheme() {
+  const t = THEMES[state.themeIdx];
+  const c = new THREE.Color();
+  const sat = t.sat ?? 0.85;
+  for (let i = 0; i < COUNT; i++) {
+    // 极光幻彩：色相沿粒子序号铺满整个色环；其余主题在基础色相附近抖动
+    const hue = t.rainbow ? (i / COUNT) + Math.random() * 0.02
+                          : t.hue + (Math.random() - 0.5) * 0.07;
+    const bright = Math.random();
+    if (bright > 0.93) c.setHSL(hue, Math.min(0.35, sat), 0.88);   // 少量亮白星点
+    else c.setHSL(hue, sat, 0.5 + Math.random() * 0.25);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  if (geo) { geo.attributes.aColor.needsUpdate = true; }
+  haloSprite.material.color.set(t.accent);
+  document.getElementById('gestureTag').style.borderColor = t.accent + '66';
+  document.getElementById('btnTheme').textContent = `配色 · ${t.name}`;
+}
+
+function buildParticles(n) {
+  if (points) { group.remove(points); geo.dispose(); }
+  COUNT = n;
+  pos = new Float32Array(n * 3);
+  vel = new Float32Array(n * 3);
+  dir = new Float32Array(n * 3);
+  radius = new Float32Array(n);
+  omega = new Float32Array(n);
+  phase = new Float32Array(n);
+  colors = new Float32Array(n * 3);
+  sizes = new Float32Array(n);
+
+  // 斐波那契球分布：内层致密球体 + 外层稀疏散冕
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < n; i++) {
+    const i3 = i * 3;
+    const y = 1 - (i / (n - 1)) * 2;
+    const r = Math.sqrt(1 - y * y);
+    const th = golden * i;
+    dir[i3] = Math.cos(th) * r;
+    dir[i3 + 1] = y;
+    dir[i3 + 2] = Math.sin(th) * r;
+
+    const shell = Math.random();
+    let rad;
+    if (shell < 0.5) rad = BASE_R * (0.1 + 0.78 * Math.pow(Math.random(), 0.62)); // 体积核心：中心致密，亮核自然涌现
+    else if (shell < 0.88) rad = BASE_R * (0.88 + Math.random() * 0.16);           // 主球壳：星球表面
+    else rad = BASE_R * (1.06 + Math.random() * 0.32);                             // 贴身散冕
+    radius[i] = rad;
+    omega[i] = (0.08 + Math.random() * 0.2) / Math.sqrt(rad / BASE_R);     // 内圈转得快
+    phase[i] = Math.random() * Math.PI * 2;
+
+    pos[i3] = dir[i3] * rad;
+    pos[i3 + 1] = dir[i3 + 1] * rad;
+    pos[i3 + 2] = dir[i3 + 2] * rad;
+
+    const s = Math.random();
+    sizes[i] = s > 0.985 ? 3.2 + Math.random() * 1.8 : 1.0 + Math.random() * 1.6;
+  }
+
+  geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aColor', new THREE.BufferAttribute(colors, 3));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+  points = new THREE.Points(geo, pMat);
+  points.frustumCulled = false;
+  group.add(points);
+
+  applyTheme();
+  document.getElementById('pCount').textContent = n.toLocaleString();
+  window.__status.particles = n;
+}
+buildParticles(26000);
+
+/* ---------- 后期：拖尾 + 辉光 ---------- */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const afterimage = new AfterimagePass(0.76);
+composer.addPass(afterimage);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.5, 0.36);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+/* ================= 鼠标 / 触摸 兜底交互 ================= */
+const mouseNDC = new THREE.Vector2(0, 0);
+let mouseInside = false, mouseDown = false, mouseMoved = false;
+function screenToWorld(nx, ny, out) {
+  const v = new THREE.Vector3(nx, ny, 0.5).unproject(camera);
+  const d = v.sub(camera.position).normalize();
+  const t = -camera.position.z / d.z;
+  out.copy(camera.position).addScaledVector(d, t);
+  return out;
+}
+// 把 cur 以「指数滤波 + 限速」方式滑向 target：粒子永远滑动，不会瞬跳
+function glideTo(cur, target, k, maxStep) {
+  cur.x += THREE.MathUtils.clamp((target.x - cur.x) * k, -maxStep, maxStep);
+  cur.y += THREE.MathUtils.clamp((target.y - cur.y) * k, -maxStep, maxStep);
+  cur.z += THREE.MathUtils.clamp((target.z - cur.z) * k, -maxStep, maxStep);
+}
+// 旋转响应曲线：小偏移也有明显转速（消除死区感），大幅偏移上限更高
+const rotCurve = v => Math.sign(v) * Math.pow(Math.abs(v), 0.72);
+addEventListener('pointermove', e => {
+  mouseNDC.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  mouseInside = true;
+  mouseMoved = true;
+});
+addEventListener('pointerdown', e => {
+  if (e.target.closest('#panel')) return;
+  mouseDown = true;
+  mouseNDC.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+});
+addEventListener('pointerup', () => { mouseDown = false; });
+// 滚轮：推近 / 拉远相机（对数缩放，每格视觉缩放量均匀）
+addEventListener('wheel', e => {
+  state.camZTarget = THREE.MathUtils.clamp(state.camZTarget * Math.exp(e.deltaY * 0.0011), 8, 165);
+}, { passive: true });
+addEventListener('click', e => { if (!e.target.closest('#panel')) triggerExplosion(); });
+addEventListener('keydown', e => {
+  if (e.code === 'Space') { e.preventDefault(); triggerExplosion(); }
+  if (e.code === 'KeyV') cycleTheme();
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= THEMES.length) { state.themeIdx = n - 1; applyTheme(); }
+});
+
+/* ================= 爆发 ================= */
+function triggerExplosion() {
+  state.scatter = 1.5;
+  state.explosionFlash = 1;
+  for (let i = 0; i < COUNT; i++) {
+    const i3 = i * 3;
+    const px = pos[i3], py = pos[i3 + 1], pz = pos[i3 + 2];
+    const len = Math.sqrt(px * px + py * py + pz * pz) || 1;
+    const kick = 45 + Math.random() * 55;
+    vel[i3] += (px / len) * kick + (Math.random() - 0.5) * 22;
+    vel[i3 + 1] += (py / len) * kick + (Math.random() - 0.5) * 22;
+    vel[i3 + 2] += (pz / len) * kick + (Math.random() - 0.5) * 22;
+  }
+}
+document.getElementById('btnBoom').addEventListener('click', triggerExplosion);
+
+/* ================= 主题切换 ================= */
+function cycleTheme() {
+  state.themeIdx = (state.themeIdx + 1) % THEMES.length;
+  applyTheme();
+}
+document.getElementById('btnTheme').addEventListener('click', cycleTheme);
+
+/* ================= 粒子规模 ================= */
+let sliderTimer = null;
+const pSlider = document.getElementById('pSlider');
+pSlider.addEventListener('input', () => {
+  document.getElementById('pSliderVal').textContent = pSlider.value;
+  clearTimeout(sliderTimer);
+  sliderTimer = setTimeout(() => buildParticles(parseInt(pSlider.value)), 350);
+});
+
+/* ================= 手势识别（MediaPipe） ================= */
+const camWrap = document.getElementById('camWrap');
+const camCanvas = document.getElementById('camCanvas');
+const camCtx = camCanvas.getContext('2d');
+let handLandmarker = null, camVideo = null, lastVideoTime = -1;
+let prevGesture = 'idle', fistFrames = 0;
+
+function withTimeout(p, ms, label) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(label + ' 超时')), ms))]);
+}
+let handInitSeq = 0;
+async function initHandTracking() {
+  if (state.mode === 'hand') { // 再次点击 = 关闭
+    stopCamera();
+    return;
+  }
+  const seq = ++handInitSeq;
+  setMsg('正在加载手势识别模型…');
+  window.__status.mp = 'loading';
+  const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+  try {
+    if (!handLandmarker) {
+      const vision = await withTimeout(import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14'), 20000, '模块加载');
+      const fileset = await withTimeout(vision.FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'), 20000, 'WASM加载');
+      const create = delegate => vision.HandLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate },
+        runningMode: 'VIDEO',
+        numHands: 1,
+      });
+      let lm = null;
+      try { lm = await withTimeout(create('GPU'), 9000, 'GPU初始化'); }
+      catch (e) { lm = null; }  // GPU 不可用/挂起 → 降级 CPU
+      if (!lm) lm = await withTimeout(create('CPU'), 25000, 'CPU初始化');
+      if (seq !== handInitSeq) return; // 已有更新的初始化请求
+      handLandmarker = lm;
+    }
+    window.__status.mp = 'ready';
+    await startCamera();
+  } catch (err) {
+    if (seq !== handInitSeq) return;
+    window.__status.mp = 'failed';
+    setMsg('手势模型加载失败（' + (err.message || '网络问题') + '），已回退鼠标模式', true);
+    document.getElementById('btnCam').textContent = '开启摄像头';
+  }
+}
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' }, audio: false,
+    });
+    camVideo = document.createElement('video');
+    camVideo.srcObject = stream;
+    camVideo.muted = true;
+    camVideo.playsInline = true;
+    await camVideo.play();
+    camWrap.style.display = 'block';
+    state.mode = 'hand';
+    document.getElementById('mode').textContent = '手势';
+    document.getElementById('btnCam').textContent = '关闭摄像头';
+    window.__status.mode = 'hand';
+    window.__status.cam = 'on';
+    window.__status.mp = 'ready';
+    setMsg('手势模式已开启：把手举到摄像头前 ✋');
+  } catch (err) {
+    window.__status.cam = 'denied';
+    setMsg('无法访问摄像头（' + (err.name || '未知错误') + '），已保持鼠标模式', true);
+  }
+}
+function stopCamera() {
+  if (camVideo && camVideo.srcObject) camVideo.srcObject.getTracks().forEach(t => t.stop());
+  camVideo = null;
+  camWrap.style.display = 'none';
+  state.mode = 'mouse';
+  state.gesture = 'idle'; state.pinch = 0; state.palmRepel = 0; state.handSeen = false;
+  document.getElementById('mode').textContent = '鼠标';
+  document.getElementById('btnCam').textContent = '开启摄像头';
+  window.__status.mode = 'mouse';
+  window.__status.cam = 'off';
+  setMsg('已切换回鼠标模式');
+}
+document.getElementById('btnCam').addEventListener('click', initHandTracking);
+
+/* ---------- 手势解析 ---------- */
+const HAND_CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function dist2d(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return Math.hypot(dx, dy); }
+
+function analyzeHand(lm) {
+  const scale = dist2d(lm[0], lm[5]) || 1e-4;   // 手掌基准尺寸
+  const pinchRatio = dist2d(lm[4], lm[8]) / scale;
+  const pinch = THREE.MathUtils.clamp((0.75 - pinchRatio) / 0.5, 0, 1);
+
+  // 伸直的手指数
+  let extended = 0;
+  const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18];
+  const extFlag = tips.map((tp, k) => dist2d(lm[tp], lm[0]) > dist2d(lm[pips[k]], lm[0]) * 1.12);
+  for (let k = 0; k < 4; k++) if (extFlag[k]) extended++;
+
+  let gesture;
+  if (extended <= 1 && pinch < 0.55) gesture = 'fist';
+  else if (pinch > 0.45) gesture = 'pinch';
+  else if (extFlag[0] && extFlag[1] && !extFlag[2] && !extFlag[3]) gesture = 'rotate'; // ✌️ 双指旋转
+  else if (extended >= 3) gesture = 'palm';
+  else gesture = 'idle';
+
+  // 手掌中心（镜像 X）
+  let cx = 0, cy = 0;
+  for (const idx of [0, 5, 9, 13, 17]) { cx += lm[idx].x; cy += lm[idx].y; }
+  cx /= 5; cy /= 5;
+  return { gesture, pinch, cx, cy, scale };
+}
+
+function drawSkeleton(lm) {
+  const w = camCanvas.width, h = camCanvas.height;
+  camCtx.setTransform(1, 0, 0, 1, 0, 0);
+  camCtx.clearRect(0, 0, w, h);
+
+  // 底层：摄像头实景（镜像 + 调暗）
+  if (camVideo && camVideo.readyState >= 2) {
+    camCtx.save();
+    camCtx.globalAlpha = 0.38;
+    camCtx.translate(w, 0); camCtx.scale(-1, 1);
+    camCtx.drawImage(camVideo, 0, 0, w, h);
+    camCtx.restore();
+    camCtx.globalAlpha = 1;
+  }
+  if (!lm) return;
+
+  const accent = THEMES[state.themeIdx].accent;
+  camCtx.save();
+  camCtx.translate(w, 0); camCtx.scale(-1, 1);  // 镜像
+  camCtx.lineCap = 'round'; camCtx.lineJoin = 'round';
+
+  // 骨架连线（带辉光）
+  camCtx.shadowColor = accent; camCtx.shadowBlur = 7;
+  camCtx.strokeStyle = accent;
+  camCtx.lineWidth = 3;
+  for (const [a, b] of HAND_CONNECTIONS) {
+    camCtx.beginPath();
+    camCtx.moveTo(lm[a].x * w, lm[a].y * h);
+    camCtx.lineTo(lm[b].x * w, lm[b].y * h);
+    camCtx.stroke();
+  }
+
+  // 关节与指尖
+  camCtx.shadowBlur = 4;
+  for (let k = 0; k < lm.length; k++) {
+    const isTip = k === 4 || k === 8 || k === 12 || k === 16 || k === 20;
+    camCtx.beginPath();
+    camCtx.arc(lm[k].x * w, lm[k].y * h, isTip ? 4 : 2.4, 0, Math.PI * 2);
+    camCtx.fillStyle = isTip ? '#ffffff' : '#cfeeff';
+    camCtx.fill();
+  }
+
+  // 捏合指示：拇指-食指之间画渐隐连线 + 收缩光环
+  const px = (lm[4].x + lm[8].x) / 2 * w, py = (lm[4].y + lm[8].y) / 2 * h;
+  const pd = dist2d(lm[4], lm[8]) * w;
+  camCtx.beginPath();
+  camCtx.moveTo(lm[4].x * w, lm[4].y * h);
+  camCtx.lineTo(lm[8].x * w, lm[8].y * h);
+  camCtx.strokeStyle = 'rgba(255,255,255,0.75)';
+  camCtx.lineWidth = 2;
+  camCtx.stroke();
+  camCtx.beginPath();
+  camCtx.arc(px, py, Math.max(4, pd * 0.6), 0, Math.PI * 2);
+  camCtx.strokeStyle = accent;
+  camCtx.globalAlpha = 0.25 + state.pinch * 0.65;
+  camCtx.lineWidth = 1.6;
+  camCtx.stroke();
+  camCtx.globalAlpha = 1;
+  camCtx.restore();
+}
+
+const gestureNames = { idle: '待机', pinch: '捏合 · 聚合', palm: '张开 · 扩散', fist: '握拳 · 爆发', rotate: '双指 · 旋转' };
+const tagEl = document.getElementById('gestureTag');
+const camBadge = document.getElementById('camGesture');
+function updateHand(dt, now) {
+  if (state.mode !== 'hand' || !handLandmarker || !camVideo || camVideo.readyState < 2) return;
+  if (camVideo.currentTime === lastVideoTime) return;
+  lastVideoTime = camVideo.currentTime;
+  let result;
+  try { result = handLandmarker.detectForVideo(camVideo, now); } catch (e) { return; }
+
+  const lm = result && result.landmarks && result.landmarks[0];
+  drawSkeleton(lm);
+  if (!lm) {
+    state.handSeen = false;
+    state.gesture = 'idle';
+    state.pinchTarget = 0;
+    state.palmTarget = 0;
+    // 手离开画面：保留旋转惯性缓慢衰减，回到怠速自转
+    state.yawTarget = Math.abs(state.yawTarget) > 0.04 ? state.yawTarget * Math.exp(-dt * 1.2) : 0.04;
+    state.pitchTarget *= Math.exp(-dt * 3);
+    tagEl.textContent = '未检测到手';
+    tagEl.classList.remove('active');
+    camBadge.textContent = '未检测到手';
+    camBadge.classList.remove('active');
+    window.__status.gesture = 'none';
+    return;
+  }
+  const info = analyzeHand(lm);
+  state.handSeen = true;
+
+  // 捏合点 / 手掌中心 → 世界坐标（只写原始目标，平滑统一在主循环做）
+  const pinchNx = -((lm[4].x + lm[8].x) / 2 - 0.5) * 2;
+  const pinchNy = -((lm[4].y + lm[8].y) / 2 - 0.5) * 2;
+  screenToWorld(pinchNx, pinchNy, state.rawPinchPoint);
+  const palmNx = -((info.cx) - 0.5) * 2;
+  const palmNy = -((info.cy) - 0.5) * 2;
+  screenToWorld(palmNx, palmNy, state.rawAttractor);
+  // 手朝镜头前推（变大）→ 相机潜入粒子内部
+  // 尺寸先重度滤波，再对数映射，最后加死区：识别抖动不进相机目标
+  state.scaleSm += (info.scale - state.scaleSm) * (1 - Math.exp(-dt * 3));
+  const depthT = THREE.MathUtils.clamp((state.scaleSm - 0.13) / (0.42 - 0.13), 0, 1);
+  const zTarget = 135 * Math.pow(8 / 135, depthT);
+  if (Math.abs(zTarget - state.camZTarget) > 1.2) state.camZTarget = zTarget;
+  // 只有双指手势控制旋转；其他手势角速度目标衰减（松手带一点惯性甩尾）
+  if (info.gesture === 'rotate') {
+    state.yawTarget = rotCurve(palmNx) * 3.2;
+    state.pitchTarget = rotCurve(palmNy) * 2.2;
+  } else {
+    state.yawTarget *= Math.exp(-dt * 3);
+    state.pitchTarget *= Math.exp(-dt * 3);
+    if (Math.abs(state.yawTarget) < 0.04) state.yawTarget = 0.04;
+  }
+
+  // 手势状态机（握拳触发一次爆发）
+  if (info.gesture === 'fist') fistFrames++;
+  else fistFrames = 0;
+  if (fistFrames === 2 && prevGesture !== 'fist') triggerExplosion();
+  if (info.gesture !== 'idle') prevGesture = info.gesture;
+
+  state.gesture = info.gesture;
+  state.pinchTarget = info.pinch;
+  state.palmTarget = info.gesture === 'palm' ? 1 : 0;
+
+  tagEl.textContent = gestureNames[info.gesture] || info.gesture;
+  tagEl.classList.toggle('active', info.gesture !== 'idle');
+  camBadge.textContent = gestureNames[info.gesture] || info.gesture;
+  camBadge.classList.toggle('active', info.gesture !== 'idle');
+  window.__status.gesture = info.gesture;
+}
+
+/* ================= 主循环 ================= */
+const clock = new THREE.Clock();
+let fpsAcc = 0, fpsN = 0, fpsTimer = 0;
+const fpsEl = document.getElementById('fps');
+const tmpMouse = new THREE.Vector3();
+let springSm = 4.2;          // 弹簧刚度（平滑变化，避免手势切换时硬跳）
+const VMAX = 85, VMAX2 = VMAX * VMAX;
+
+const tmp = new THREE.Vector3();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const now = performance.now();
+  const t = clock.elapsedTime;
+
+  updateHand(dt, now);
+
+  /* ---- 能量状态（缓变） ---- */
+  const energyTarget = state.gesture === 'pinch' ? 0.62 : state.gesture === 'palm' ? 1.3 : 1.0;
+  state.energy += (energyTarget - state.energy) * (1 - Math.exp(-dt * 3));
+  if (state.scatter > 0) state.scatter -= dt;
+  if (state.explosionFlash > 0) state.explosionFlash = Math.max(0, state.explosionFlash - dt * 2.2);
+
+  /* ---- 输入源（原始目标，30fps 识别 / 鼠标事件直接写入） ---- */
+  if (state.mode === 'mouse' && mouseInside && mouseMoved) {
+    screenToWorld(mouseNDC.x, mouseNDC.y, tmpMouse);
+    state.rawAttractor.copy(tmpMouse);
+    state.rawPinchPoint.copy(tmpMouse);
+    state.yawTarget = rotCurve(mouseNDC.x) * 3.2;
+    state.pitchTarget = rotCurve(mouseNDC.y) * 2.2;
+    state.pinchTarget = mouseDown ? 0 : 0.18;
+    state.palmTarget = mouseDown ? 1 : 0;
+  }
+
+  /* ---- 输入平滑：指数滤波 + 限速滑动（关键：粒子只会滑，不会跟着识别帧跳步） ---- */
+  const kPos = 1 - Math.exp(-dt * 5);
+  const maxStep = 110 * dt;
+  glideTo(state.attractor, state.rawAttractor, kPos, maxStep);
+  glideTo(state.pinchPoint, state.rawPinchPoint, kPos, maxStep);
+  state.pinch += (state.pinchTarget - state.pinch) * (1 - Math.exp(-dt * 5));
+  state.palmRepel += (state.palmTarget - state.palmRepel) * (1 - Math.exp(-dt * 4));
+
+  /* ---- 粒子物理（临界阻尼弹簧：无过冲，杜绝"跳几下再静止"） ---- */
+  const clump = state.pinch * 0.55;
+  const springTarget = state.scatter > 0 ? 0.6 : 9 * (1 - clump * 0.5);
+  springSm += (springTarget - springSm) * (1 - Math.exp(-dt * 2.5));
+  const springK = springSm;
+  const damp = Math.exp(-1.6 * Math.sqrt(Math.max(springSm, 0.15)) * dt);
+  const repelR = 46;
+  const pinchVortex = state.pinch * 22;
+  const doAttract = state.pinch > 0.02 || state.mode === 'mouse';
+  const ax = state.pinchPoint.x, ay = state.pinchPoint.y, az = state.pinchPoint.z;
+  const hx = state.attractor.x, hy = state.attractor.y, hz = state.attractor.z;
+  // 潜入过程中淡出手掌排斥（排斥中心随识别跳步，近距离会推得粒子一顿一顿）
+  const repel = state.palmRepel * THREE.MathUtils.clamp((state.camZ - 55) / 45, 0, 1);
+  const scatterOn = state.scatter > 0;
+
+  for (let i = 0; i < COUNT; i++) {
+    const i3 = i * 3;
+    const dx = dir[i3], dy = dir[i3 + 1], dz = dir[i3 + 2];
+    const A = omega[i] * t + phase[i];
+    const cosA = Math.cos(A), sinA = Math.sin(A);
+    const rr = radius[i] * state.energy;
+    let tx = rr * (dx * cosA + dz * sinA);
+    let ty = rr * dy;
+    let tz = rr * (dz * cosA - dx * sinA);
+
+    // 捏合：目标点偏向捏合位置
+    if (clump > 0.001) {
+      tx += (ax - tx) * clump;
+      ty += (ay - ty) * clump;
+      tz += (az - tz) * clump;
+    }
+
+    let px = pos[i3], py = pos[i3 + 1], pz = pos[i3 + 2];
+    let vx = (tx - px) * springK * dt;
+    let vy = (ty - py) * springK * dt;
+    let vz = (tz - pz) * springK * dt;
+
+    if (doAttract) {
+      const ddx = ax - px, ddy = ay - py, ddz = az - pz;
+      const d2 = ddx * ddx + ddy * ddy + ddz * ddz;
+      if (d2 > 1) {
+        const d = Math.sqrt(d2);
+        const f = state.pinch * 160 / (d2 + 240);
+        vx += (ddx / d) * f * d * 3.6 * dt;
+        vy += (ddy / d) * f * d * 3.6 * dt;
+        vz += (ddz / d) * f * d * 3.6 * dt;
+        // 涡旋
+        vx += (-ddz / d) * pinchVortex * 1.2 * f * dt;
+        vz += (ddx / d) * pinchVortex * 1.2 * f * dt;
+      }
+    }
+
+    if (repel > 0.01) {
+      const ddx = px - hx, ddy = py - hy, ddz = pz - hz;
+      const d = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz) || 1;
+      if (d < repelR * 2.2) {
+        const f = repel * 500 * Math.exp(-d / repelR);
+        vx += (ddx / d) * f * dt * 6;
+        vy += (ddy / d) * f * dt * 6;
+        vz += (ddz / d) * f * dt * 6;
+      }
+    }
+
+    if (scatterOn) {
+      // 爆发后：噪声漂移
+      vx += Math.sin(py * 0.045 + t * 1.4 + phase[i]) * 18 * dt;
+      vy += Math.sin(pz * 0.05 + t * 1.1 + phase[i] * 2.0) * 18 * dt;
+      vz += Math.sin(px * 0.042 + t * 1.7 + phase[i] * 3.0) * 18 * dt;
+    }
+
+    vel[i3] = (vel[i3] + vx) * damp;
+    vel[i3 + 1] = (vel[i3 + 1] + vy) * damp;
+    vel[i3 + 2] = (vel[i3 + 2] + vz) * damp;
+
+    // 全局限速：任何粒子每秒最多滑行 VMAX 单位，杜绝任何形式的瞬跳
+    const v2 = vel[i3] * vel[i3] + vel[i3 + 1] * vel[i3 + 1] + vel[i3 + 2] * vel[i3 + 2];
+    if (v2 > VMAX2) {
+      const s = VMAX / Math.sqrt(v2);
+      vel[i3] *= s; vel[i3 + 1] *= s; vel[i3 + 2] *= s;
+    }
+
+    pos[i3] += vel[i3] * dt;
+    pos[i3 + 1] += vel[i3 + 1] * dt;
+    pos[i3 + 2] += vel[i3 + 2] * dt;
+  }
+  geo.attributes.position.needsUpdate = true;
+
+  /* ---- 核心与整体 ---- */
+  // 中心亮核由体积粒子沿视线自然叠加形成；光晕只做环境氛围
+  haloSprite.material.opacity = 0.15 + state.explosionFlash * 0.25;
+  haloSprite.scale.setScalar(36 * (1 + 0.03 * Math.sin(t * 1.3)) * (0.7 + state.energy * 0.4));
+
+  /* ---- 旋转摇杆：手/鼠标偏移 → 旋转角速度（旋转手势下响应更快） ---- */
+  const kRot = 1 - Math.exp(-dt * (state.gesture === 'rotate' ? 8 : 4));
+  state.yawVel += (state.yawTarget - state.yawVel) * kRot;
+  state.pitchVel += (state.pitchTarget - state.pitchVel) * kRot;
+  group.rotation.y += state.yawVel * dt;
+  group.rotation.x = THREE.MathUtils.clamp(group.rotation.x + state.pitchVel * dt, -1.1, 1.1);
+
+  /* ---- 相机推拉：速度平滑——先变速再位移，加减速全程连续 ---- */
+  const vCap = state.camZ < 70 ? 45 : 70;   // 深入粒子云后自动减速
+  const desiredVel = THREE.MathUtils.clamp((state.camZTarget - state.camZ) * 1.8, -vCap, vCap);
+  state.camZVel += (desiredVel - state.camZVel) * (1 - Math.exp(-dt * 3));
+  state.camZ += state.camZVel * dt;
+  camera.position.set(0, 0, state.camZ);
+  camera.lookAt(0, 0, 0);
+
+  // 拖尾与帧率无关：短彗尾（约 0.16s 衰减），保留滑动感但不拖长尾
+  afterimage.uniforms.damp.value = Math.exp(-14.0 * dt);
+  composer.render();
+
+  window.__status.camZ = Math.round(state.camZ * 10) / 10;
+
+  /* ---- FPS ---- */
+  fpsAcc += dt; fpsN++;
+  fpsTimer += dt;
+  if (fpsTimer >= 0.5) {
+    const f = Math.round(fpsN / fpsAcc);
+    fpsEl.textContent = f;
+    window.__status.fps = f;
+    fpsAcc = 0; fpsN = 0; fpsTimer = 0;
+  }
+}
+setMsg(state.mode === 'mouse' ? '鼠标模式：移动吸引 · 按住推开 · 点击爆发' : '');
+animate();
+</script>
+</body>
+</html>
